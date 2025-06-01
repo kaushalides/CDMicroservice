@@ -1,0 +1,80 @@
+stages:
+  - build
+  - test
+
+variables:
+  DOCKER_DRIVER: overlay2
+  MAVEN_OPTS: "-Dmaven.repo.local=$CI_PROJECT_DIR/.m2/repository"
+
+cache:
+  paths:
+    - .m2/repository/
+
+before_script:
+  - apk add --no-cache docker-compose curl
+
+build:
+  stage: build
+  image: docker:latest
+  services:
+    - docker:dind
+  script:
+    # Build the application first
+    - echo "Building the Spring Boot application..."
+    - docker run --rm -v "$PWD":/usr/src/app -v "$PWD/.m2":/root/.m2 -w /usr/src/app maven:3.8.4-openjdk-17 mvn clean package -DskipTests
+
+    # Build Docker image
+    - echo "Building Docker image..."
+    - docker build -t patientservice:latest .
+
+    # Save Docker image as artifact
+    - docker save patientservice:latest > patientservice.tar
+
+    # Build test image if you have separate test dockerfile
+    - echo "Docker image built successfully"
+  artifacts:
+    paths:
+      - patientservice.tar
+      - target/*.jar
+    expire_in: 1 hour
+
+test:
+  stage: test
+  image: docker:latest
+  services:
+    - docker:dind
+  dependencies:
+    - build
+  script:
+    # Load the Docker image
+    - docker load < patientservice.tar
+
+    # Start services
+    - echo "Starting services with docker-compose..."
+    - docker-compose up -d
+
+    # Wait for services to be ready
+    - echo "Waiting for services to start..."
+    - sleep 30
+
+    # Check if services are running
+    - docker-compose ps
+
+    # Wait for application to be ready
+    - echo "Waiting for application to be ready..."
+    - timeout 60 sh -c 'until curl -f http://localhost:8080/api/patients/health; do echo "Waiting for app..."; sleep 5; done'
+
+    # Run integration tests
+    - echo "Running integration tests..."
+    - docker-compose exec -T patientservice java -jar app.jar --spring.profiles.active=test &
+
+    # Run unit tests inside container
+    - docker run --rm -v "$PWD":/usr/src/app -v "$PWD/.m2":/root/.m2 -w /usr/src/app maven:3.8.4-openjdk-17 mvn test
+
+    # Optional: Run API tests
+    - echo "Running API health check..."
+    - curl -f http://localhost:8080/api/patients/health || exit 1
+
+  after_script:
+    - docker-compose down
+    - docker-compose logs
