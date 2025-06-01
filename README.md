@@ -297,4 +297,3 @@ curl http://localhost:8080/api/patients/health
 ## 👩‍💻 Author
 
 **Name**: Hithandura Gedara Kaushali Shanika De Silva  
-**Student ID**: 12413702
